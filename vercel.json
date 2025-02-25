@@ -9,5 +9,15 @@
         "buildCommand": "npm run build"
       }
     }
-  ]
+  ],
+  "functions": {
+    "api/generate": {
+      "memory": 1024,
+      "maxDuration": 300
+    },
+    "app/api/generate/route": {
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  }
 } 
