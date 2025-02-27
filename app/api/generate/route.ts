@@ -58,40 +58,64 @@ export async function POST(req: Request) {
 
           const reader = response.body.getReader();
           let combinedText = "";
+          let buffer = ""; // 用于存储不完整的行
 
           // 处理流数据
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            // 将buffer转换为文本
-            const chunk = new TextDecoder().decode(value);
+            // 将buffer转换为文本并添加到之前的buffer
+            buffer += new TextDecoder().decode(value);
             
-            // Dify API返回的是NDJSON，每行是一个JSON对象
-            const lines = chunk.split('\n').filter(line => line.trim());
+            // 按行分割，保留最后一个可能不完整的行
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ""; // 保存最后一行到buffer，如果是空行则使用空字符串
             
             for (const line of lines) {
-              try {
-                const data = JSON.parse(line);
-                
-                // 检查是否有文本内容或错误
-                if (data.event === 'message') {
-                  // 存储完整文本以便后续处理
-                  combinedText += data.answer || data.text || "";
+              const trimmedLine = line.trim();
+              if (!trimmedLine) continue; // 跳过空行
+              
+              if (trimmedLine === 'event: ping') continue; // 忽略ping事件
+              
+              // 只处理data字段
+              if (trimmedLine.startsWith('data: ')) {
+                try {
+                  // 提取data后面的JSON内容
+                  const jsonStr = trimmedLine.slice(6); // 去掉'data: '前缀
+                  const data = JSON.parse(jsonStr);
                   
-                  // 发送到客户端的实时更新
-                  controller.enqueue(encoder.encode(JSON.stringify({ 
-                    type: 'chunk', 
-                    content: data.answer || data.text || "" 
-                  }) + '\n'));
-                } else if (data.event === 'error') {
-                  controller.enqueue(encoder.encode(JSON.stringify({ 
-                    type: 'error', 
-                    error: data.error || "Unknown error" 
-                  }) + '\n'));
+                  // 检查所有可能包含内容的字段
+                  let content = null;
+                  
+                  // 如果是消息事件
+                  if (data.event === 'message') {
+                    content = data.answer || data.text || data.message || data.content;
+                  }
+                  // 如果是直接的回答内容
+                  else if (data.answer || data.text || data.message || data.content) {
+                    content = data.answer || data.text || data.message || data.content;
+                  }
+                  
+                  if (content) {
+                    // 存储完整文本以便后续处理
+                    combinedText += content;
+                    
+                    // 发送到客户端的实时更新
+                    controller.enqueue(encoder.encode(JSON.stringify({ 
+                      type: 'chunk', 
+                      content: content 
+                    }) + '\n'));
+                  }
+
+                  // 检查是否有错误
+                  if (data.error) {
+                    throw new Error(data.error);
+                  }
+                } catch (e) {
+                  console.error("Error parsing JSON from stream:", e);
+                  // 继续处理下一行，不中断流
                 }
-              } catch (e) {
-                console.error("Error parsing JSON from stream:", e, line);
               }
             }
           }
